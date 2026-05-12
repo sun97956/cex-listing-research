@@ -1,8 +1,8 @@
 # CEX Listing Research Dashboard
 
-Tracks new token listings across 10 major CEXs in 2026. Data sourced from [listedon.org](https://listedon.org).
+Tracks new token listings across 8 major CEXs in 2026. Data sourced from [listedon.org](https://listedon.org).
 
-**Exchanges covered:** Binance, OKX, Bybit, Coinbase, Gate.io, Bitget, KuCoin, MEXC, Kraken, Upbit
+**Exchanges covered:** Binance, OKX, Coinbase, Gate.io, KuCoin, MEXC, Kraken, Upbit
 
 ## Quickstart
 
