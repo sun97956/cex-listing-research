@@ -3,7 +3,12 @@
     "allow": [
       "WebFetch(domain:listedon.org)",
       "Bash(pip install *)",
-      "mcp__Claude_in_Chrome__tabs_context_mcp"
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.binance.com)",
+      "mcp__02ac155f-b6ea-4db8-9b26-d09410d295c4__web_search_exa",
+      "mcp__02ac155f-b6ea-4db8-9b26-d09410d295c4__web_fetch_exa"
     ]
   }
 }

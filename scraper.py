@@ -7,8 +7,8 @@ from database import init_db, insert_listing
 BASE_URL = "https://listedon.org/en/search"
 
 TARGET_EXCHANGES = {
-    "Binance", "OKX", "Bybit", "Coinbase", "Gate.io",
-    "Bitget", "KuCoin", "MEXC", "Kraken", "Upbit"
+    "Binance", "OKX", "ByBit", "Coinbase Exchange",
+    "Bithumb", "Upbit"
 }
 
 HEADERS = {
