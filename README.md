@@ -1,8 +1,8 @@
 # CEX Listing Research Dashboard
 
-Tracks new token listings across 8 major CEXs in 2026. Data sourced from [listedon.org](https://listedon.org).
+Tracks new token listings across 6 major CEXs + Binance Futures in 2026. Spot data sourced from [listedon.org](https://listedon.org), Futures data from Binance official API.
 
-**Exchanges covered:** Binance, OKX, Gate.io, KuCoin, Bitget，MEXC, Kraken, Upbit
+**Exchanges covered:** Binance (Spot + Futures), OKX, ByBit, Coinbase, Bithumb, Upbit
 
 ## Quickstart
 
@@ -11,6 +11,10 @@ pip install -r requirements.txt
 
 # View dashboard (data already included)
 streamlit run dashboard.py
+
+# Update with latest listings
+python scraper.py
+python binance_futures.py
 
 # Update with latest listings
 python scraper.py
