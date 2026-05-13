@@ -75,3 +75,51 @@ def get_stats():
             "SELECT exchange, COUNT(*) as count FROM listings GROUP BY exchange ORDER BY count DESC"
         ).fetchall()
     return {"total": total, "by_exchange": dict(by_exchange)}
+
+
+def init_prices_table():
+    with get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS prices (
+                ticker          TEXT NOT NULL,
+                exchange        TEXT NOT NULL,
+                listing_date    TEXT NOT NULL,
+                coingecko_id    TEXT,
+                category        TEXT,
+                price_listing   REAL,
+                price_7d        REAL,
+                price_14d       REAL,
+                fdv_listing     REAL,
+                change_7d_pct   REAL,
+                change_14d_pct  REAL,
+                PRIMARY KEY (ticker, exchange)
+            )
+        """)
+        conn.commit()
+
+
+def insert_price(ticker, exchange, listing_date, coingecko_id, category,
+                 price_listing, price_7d, price_14d, fdv_listing,
+                 change_7d_pct, change_14d_pct):
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO prices
+            (ticker, exchange, listing_date, coingecko_id, category,
+             price_listing, price_7d, price_14d, fdv_listing,
+             change_7d_pct, change_14d_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ticker, exchange, listing_date, coingecko_id, category,
+              price_listing, price_7d, price_14d, fdv_listing,
+              change_7d_pct, change_14d_pct))
+        conn.commit()
+
+
+def get_prices():
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            """SELECT p.*, l.listing_type
+               FROM prices p
+               JOIN listings l ON p.ticker = l.ticker AND p.exchange = l.exchange
+               ORDER BY p.listing_date DESC""",
+            conn
+        )
