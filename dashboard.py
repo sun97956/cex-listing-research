@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
-from database import get_all, get_prices
+from database import get_all, get_prices, get_kline_returns
 
 st.set_page_config(page_title="CEX Listing Research", layout="wide")
 st.title("CEX Listing Research Dashboard")
@@ -11,12 +11,14 @@ st.caption("Data source: listedon.org + Binance Futures API + CoinGecko — 2026
 # ── Load data ─────────────────────────────────────────────────────────────────
 df_all = get_all()
 df_prices = get_prices()
+df_kline = get_kline_returns()
 
 if df_all.empty:
     st.warning("No data found. Run `python scraper.py` and `python binance_futures.py` first.")
     st.stop()
 
 df_all["listing_date"] = pd.to_datetime(df_all["listing_date"])
+df_all = df_all.drop_duplicates(subset=["ticker", "exchange", "listing_date"])
 df_all["month"] = df_all["listing_date"].dt.to_period("M").astype(str)
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
@@ -88,75 +90,58 @@ st.plotly_chart(fig_bar, use_container_width=True)
 
 st.divider()
 
-# ── 4. Price performance ──────────────────────────────────────────────────────
+# ── 4. Price performance (exchange K-line data) ─────────────────────────────
 st.subheader("Price Performance After Listing")
 
-if not df_p.empty and "change_14d_pct" in df_p.columns:
-    df_p_clean = df_p.dropna(subset=["change_14d_pct", "change_7d_pct"])
+df_k = df_kline[df_kline["exchange"].isin(selected_exchanges)].copy() if not df_kline.empty else pd.DataFrame()
 
-    col_a, col_b = st.columns(2)
+if not df_k.empty:
+    st.markdown("**Mean Return by Exchange (1d / 7d / 14d / 30d)**")
+    perf = df_k.groupby("exchange").agg(
+        n=("return_7d_pct", "count"),
+        mean_1d=("return_1d_pct", "mean"),
+        mean_7d=("return_7d_pct", "mean"),
+        mean_14d=("return_14d_pct", "mean"),
+        mean_30d=("return_30d_pct", "mean"),
+    ).round(1).reset_index().sort_values("mean_30d", ascending=True)
+    fig_perf = go.Figure()
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_1d"],  name="1d",  orientation="h", marker_color="#54A24B"))
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_7d"],  name="7d",  orientation="h", marker_color="#F58518"))
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_14d"], name="14d", orientation="h", marker_color="#E45756"))
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_30d"], name="30d", orientation="h", marker_color="#72B7B2"))
+    fig_perf.update_layout(
+        barmode="group", height=400,
+        xaxis_title="Mean Return (%)", yaxis_title="",
+        legend_title_text="", xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"),
+    )
+    st.plotly_chart(fig_perf, use_container_width=True)
 
-    with col_a:
-        st.markdown("**Average 14-day Return by Exchange**")
-        perf = (
-            df_p_clean.groupby("exchange")
-            .agg(
-                mean_14d=("change_14d_pct", "mean"),
-                median_14d=("change_14d_pct", "median"),
-                count=("change_14d_pct", "count"),
-            )
-            .round(1).reset_index()
-            .sort_values("median_14d", ascending=True)
-        )
-        fig_perf = go.Figure()
-        fig_perf.add_trace(go.Bar(
-            y=perf["exchange"], x=perf["mean_14d"],
-            name="Mean", orientation="h", marker_color="#4C78A8",
-        ))
-        fig_perf.add_trace(go.Bar(
-            y=perf["exchange"], x=perf["median_14d"],
-            name="Median", orientation="h", marker_color="#72B7B2",
-        ))
-        fig_perf.update_layout(
-            barmode="group", height=320,
-            xaxis_title="14d Return (%)", yaxis_title="",
-            legend_title_text="", xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"),
-        )
-        st.plotly_chart(fig_perf, use_container_width=True)
-
-    with col_b:
-        st.markdown("**7-day vs 14-day Return (Median)**")
-        perf7 = (
-            df_p_clean.groupby("exchange")
-            .agg(median_7d=("change_7d_pct", "median"), median_14d=("change_14d_pct", "median"))
-            .round(1).reset_index()
-        )
-        fig_7v14 = go.Figure()
-        fig_7v14.add_trace(go.Bar(
-            y=perf7["exchange"], x=perf7["median_7d"],
-            name="7d", orientation="h", marker_color="#F58518",
-        ))
-        fig_7v14.add_trace(go.Bar(
-            y=perf7["exchange"], x=perf7["median_14d"],
-            name="14d", orientation="h", marker_color="#E45756",
-        ))
-        fig_7v14.update_layout(
-            barmode="group", height=320,
-            xaxis_title="Return (%)", yaxis_title="",
-            legend_title_text="", xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"),
-        )
-        st.plotly_chart(fig_7v14, use_container_width=True)
+    # Price Position at Listing (followers only) — table format
+    df_followers = df_k[(df_k["is_first"] == 0) & (df_k["price_position_pct"].notna())]
+    if not df_followers.empty:
+        st.markdown("**Price Position at Listing** — price change from first listing to this exchange's listing date")
+        pos = df_followers.groupby("exchange").agg(
+            n=("price_position_pct", "count"),
+            mean_position=("price_position_pct", "mean"),
+            avg_days_later=("days_later", "mean"),
+        ).round(1).reset_index().sort_values("mean_position", ascending=True)
+        pos.columns = ["Exchange", "Sample", "Mean Position %", "Avg Days Later"]
+        st.dataframe(pos, use_container_width=True, hide_index=True)
 
     # Token-level table
     with st.expander("View all token price performance"):
-        show_cols = ["ticker", "exchange", "listing_date", "category",
-                     "price_listing", "change_7d_pct", "change_14d_pct"]
-        show = df_p_clean[show_cols].copy()
-        show.columns = ["Ticker", "Exchange", "Listing Date", "Category",
-                        "Price (USD)", "7d %", "14d %"]
-        st.dataframe(show.sort_values("14d %", ascending=False), use_container_width=True, hide_index=True)
+        show_cols = ["ticker", "exchange", "listing_date", "source_exchange", "p0",
+                     "is_first", "days_later", "price_position_pct",
+                     "return_1d_pct", "return_7d_pct", "return_14d_pct", "return_30d_pct"]
+        col_names = ["Ticker", "Exchange", "Listing Date", "Price Source", "Price (USD)",
+                     "First?", "Days Later", "Price Position %",
+                     "1d %", "7d %", "14d %", "30d %"]
+        show = df_k[show_cols].copy()
+        show.columns = col_names
+        show["First?"] = show["First?"].map({1: "Yes", 0: "No"})
+        st.dataframe(show.sort_values("30d %", ascending=True), use_container_width=True, hide_index=True)
 else:
-    st.info("Run `python price_fetcher.py` to load price data.")
+    st.info("Run `python kline_fetcher.py` to load exchange K-line price data.")
 
 st.divider()
 
@@ -183,8 +168,8 @@ if not df_p.empty and "category" in df_p.columns:
 
 st.divider()
 
-# ── 6. Binance Futures → Spot conversion ─────────────────────────────────────
-st.subheader("Binance Futures → Spot Conversion")
+# ── 6. Binance Futures → Spot ─────────────────────────────────────────────────
+st.subheader("Binance Futures → Spot")
 
 futures_tickers = set(df_all[df_all["exchange"] == "Binance Futures"]["ticker"])
 spot_df = df_all[df_all["exchange"] == "Binance"]
@@ -213,9 +198,57 @@ m1.metric("Futures Listings (2026)", total_futures)
 m2.metric("Converted to Spot", f"{total_converted} ({conversion_rate:.0f}%)")
 m3.metric("Avg Days Futures → Spot", avg_days)
 
-if converted:
-    conv_df = pd.DataFrame(converted).sort_values("Days to Spot")
-    st.dataframe(conv_df, use_container_width=True, hide_index=True)
+# BF data from bf_returns table
+df_bf_ret = pd.DataFrame()
+try:
+    import sqlite3 as _sql
+    with _sql.connect("listings.db") as _conn:
+        df_bf_ret = pd.read_sql_query("SELECT * FROM bf_returns ORDER BY bf_date", _conn)
+except Exception:
+    pass
+
+if not df_bf_ret.empty:
+    df_bf_conv = df_bf_ret[df_bf_ret["converted"] == 1]
+    df_bf_only = df_bf_ret[df_bf_ret["converted"] == 0]
+
+    # FDV comparison
+    fdv_conv = df_bf_conv["fdv_at_listing"].dropna()
+    fdv_only = df_bf_only["fdv_at_listing"].dropna()
+    if not fdv_conv.empty and not fdv_only.empty:
+        f1, f2 = st.columns(2)
+        f1.metric("Avg FDV — Converted", f"${fdv_conv.mean() / 1e6:,.0f}M")
+        f2.metric("Avg FDV — Not Converted", f"${fdv_only.mean() / 1e6:,.0f}M")
+
+    # Price performance chart: Converted vs Not Converted, 1d/7d/14d
+    st.markdown("**Post-Listing Mean Return** (Futures K-line)")
+    chart_data = []
+    for label, sub in [("→ Spot", df_bf_conv), ("BF Only", df_bf_only)]:
+        for period, col in [("1d", "r1d"), ("7d", "r7d"), ("14d", "r14d")]:
+            vals = sub[col].dropna()
+            if not vals.empty:
+                chart_data.append({"Group": label, "Period": period, "Mean Return %": round(vals.mean(), 1)})
+    if chart_data:
+        fig_bf = px.bar(
+            pd.DataFrame(chart_data), x="Period", y="Mean Return %", color="Group",
+            barmode="group", color_discrete_sequence=["#F58518", "#72B7B2"],
+        )
+        fig_bf.update_layout(height=350, xaxis_title="", legend_title_text="",
+                             yaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"))
+        st.plotly_chart(fig_bf, use_container_width=True)
+
+    # Conversion detail table with FDV and exchange coverage
+    if converted:
+        st.markdown("**Conversion Details**")
+        conv_df = pd.DataFrame(converted)
+        conv_df["FDV ($M)"] = conv_df["Ticker"].map(
+            df_bf_conv.set_index("ticker")["fdv_at_listing"].dropna().to_dict()
+        ).apply(lambda x: round(x / 1e6) if pd.notna(x) else None)
+        spot_exchanges = df[df["exchange"] != "Binance Futures"]
+        conv_df["Spot Exchanges"] = conv_df["Ticker"].apply(
+            lambda t: spot_exchanges[spot_exchanges["ticker"] == t]["exchange"].nunique()
+        )
+        conv_df = conv_df.sort_values("Days to Spot")
+        st.dataframe(conv_df, use_container_width=True, hide_index=True)
 
 st.divider()
 
