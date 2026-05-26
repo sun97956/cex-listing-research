@@ -6,7 +6,7 @@ from database import get_all, get_prices, get_kline_returns
 
 st.set_page_config(page_title="CEX Listing Research", layout="wide")
 st.title("CEX Listing Research Dashboard")
-st.caption("Data source: listedon.org + Binance Futures API + CoinGecko — 2026 New Listings")
+st.caption("Data source: listedon.org + Binance Perps API + CoinGecko — 2026 New Listings")
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 df_all = get_all()
@@ -20,6 +20,16 @@ if df_all.empty:
 df_all["listing_date"] = pd.to_datetime(df_all["listing_date"])
 df_all = df_all.drop_duplicates(subset=["ticker", "exchange", "listing_date"])
 df_all["month"] = df_all["listing_date"].dt.to_period("M").astype(str)
+
+EXCHANGE_COLORS = {
+    "Binance": "#F0B90B",
+    "Binance Perps": "#8B6914",
+    "OKX": "#000000",
+    "ByBit": "#FF6600",
+    "Coinbase Exchange": "#0052FF",
+    "Upbit": "#7B2D8E",
+    "Bithumb": "#E74C3C",
+}
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
@@ -47,13 +57,13 @@ st.subheader("Overview")
 
 this_month = pd.Timestamp.now().to_period("M").strftime("%Y-%m")
 this_month_count = df[df["month"] == this_month].shape[0]
-futures_count = df[df["exchange"] == "Binance Futures"].shape[0]
+perps_count = df[df["exchange"] == "Binance Perps"].shape[0]
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Listings", f"{len(df):,}")
 col2.metric("Exchanges Covered", df["exchange"].nunique())
 col3.metric("This Month", this_month_count)
-col4.metric("Binance Futures", futures_count)
+col4.metric("Binance Perps", perps_count)
 
 st.divider()
 
@@ -67,6 +77,7 @@ monthly = (
 fig_trend = px.line(
     monthly, x="month", y="count", color="exchange", markers=True,
     labels={"month": "Month", "count": "New Listings", "exchange": "Exchange"},
+    color_discrete_map=EXCHANGE_COLORS,
 )
 fig_trend.update_layout(xaxis_tickangle=-30, legend_title_text="Exchange", height=400)
 st.plotly_chart(fig_trend, use_container_width=True)
@@ -83,9 +94,9 @@ by_exchange = (
 fig_bar = px.bar(
     by_exchange, x="count", y="exchange", orientation="h",
     labels={"count": "Total Listings", "exchange": "Exchange"},
-    color="count", color_continuous_scale="Blues",
+    color="exchange", color_discrete_map=EXCHANGE_COLORS,
 )
-fig_bar.update_layout(coloraxis_showscale=False, height=350)
+fig_bar.update_layout(showlegend=False, height=350)
 st.plotly_chart(fig_bar, use_container_width=True)
 
 st.divider()
@@ -96,19 +107,18 @@ st.subheader("Price Performance After Listing")
 df_k = df_kline[df_kline["exchange"].isin(selected_exchanges)].copy() if not df_kline.empty else pd.DataFrame()
 
 if not df_k.empty:
-    st.markdown("**Mean Return by Exchange (1d / 7d / 14d / 30d)**")
+    st.markdown("**Mean Return by Exchange (7d / 14d / 30d)**")
     perf = df_k.groupby("exchange").agg(
         n=("return_7d_pct", "count"),
-        mean_1d=("return_1d_pct", "mean"),
         mean_7d=("return_7d_pct", "mean"),
         mean_14d=("return_14d_pct", "mean"),
         mean_30d=("return_30d_pct", "mean"),
     ).round(1).reset_index().sort_values("mean_30d", ascending=True)
     fig_perf = go.Figure()
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_1d"],  name="1d",  orientation="h", marker_color="#54A24B"))
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_7d"],  name="7d",  orientation="h", marker_color="#F58518"))
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_14d"], name="14d", orientation="h", marker_color="#E45756"))
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_30d"], name="30d", orientation="h", marker_color="#72B7B2"))
+    period_colors = {"7d": "#F58518", "14d": "#E45756", "30d": "#72B7B2"}
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_7d"],  name="7d",  orientation="h", marker_color=period_colors["7d"]))
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_14d"], name="14d", orientation="h", marker_color=period_colors["14d"]))
+    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_30d"], name="30d", orientation="h", marker_color=period_colors["30d"]))
     fig_perf.update_layout(
         barmode="group", height=400,
         xaxis_title="Mean Return (%)", yaxis_title="",
@@ -117,15 +127,16 @@ if not df_k.empty:
     st.plotly_chart(fig_perf, use_container_width=True)
 
     # Price Position at Listing (followers only) — table format
-    df_followers = df_k[(df_k["is_first"] == 0) & (df_k["price_position_pct"].notna())]
+    df_followers = df_k[df_k["is_first"] == 0]
     if not df_followers.empty:
         st.markdown("**Price Position at Listing** — price change from first listing to this exchange's listing date")
         pos = df_followers.groupby("exchange").agg(
-            n=("price_position_pct", "count"),
+            n=("days_later", "count"),
             mean_position=("price_position_pct", "mean"),
+            price_n=("price_position_pct", "count"),
             avg_days_later=("days_later", "mean"),
         ).round(1).reset_index().sort_values("mean_position", ascending=True)
-        pos.columns = ["Exchange", "Sample", "Mean Position %", "Avg Days Later"]
+        pos.columns = ["Exchange", "Sample", "Mean Position %", "Price N", "Avg Days Later"]
         st.dataframe(pos, use_container_width=True, hide_index=True)
 
     # Token-level table
@@ -168,22 +179,22 @@ if not df_p.empty and "category" in df_p.columns:
 
 st.divider()
 
-# ── 6. Binance Futures → Spot ─────────────────────────────────────────────────
-st.subheader("Binance Futures → Spot")
+# ── 6. Binance Perps → Spot ─────────────────────────────────────────────────
+st.subheader("Binance Perps → Spot")
 
-futures_tickers = set(df_all[df_all["exchange"] == "Binance Futures"]["ticker"])
+futures_tickers = set(df_all[(df_all["exchange"] == "Binance Perps") & (df_all["ticker"] != "XAUT")]["ticker"])
 spot_df = df_all[df_all["exchange"] == "Binance"]
 
 converted = []
 for ticker in futures_tickers:
-    fut_row = df_all[(df_all["exchange"] == "Binance Futures") & (df_all["ticker"] == ticker)].iloc[0]
+    fut_row = df_all[(df_all["exchange"] == "Binance Perps") & (df_all["ticker"] == ticker)].iloc[0]
     spot_rows = spot_df[spot_df["ticker"] == ticker]
     if not spot_rows.empty:
         spot_row = spot_rows.iloc[0]
         days = (spot_row["listing_date"] - fut_row["listing_date"]).days
         converted.append({
             "Ticker": ticker,
-            "Futures Date": fut_row["listing_date"].strftime("%Y-%m-%d"),
+            "Perps Date": fut_row["listing_date"].strftime("%Y-%m-%d"),
             "Spot Date": spot_row["listing_date"].strftime("%Y-%m-%d"),
             "Days to Spot": days,
         })
@@ -194,16 +205,16 @@ conversion_rate = total_converted / total_futures * 100 if total_futures else 0
 avg_days = round(sum(r["Days to Spot"] for r in converted) / total_converted, 1) if converted else 0
 
 m1, m2, m3 = st.columns(3)
-m1.metric("Futures Listings (2026)", total_futures)
+m1.metric("Perps Listings (2026)", total_futures)
 m2.metric("Converted to Spot", f"{total_converted} ({conversion_rate:.0f}%)")
-m3.metric("Avg Days Futures → Spot", avg_days)
+m3.metric("Avg Days Perps → Spot", avg_days)
 
 # BF data from bf_returns table
 df_bf_ret = pd.DataFrame()
 try:
     import sqlite3 as _sql
     with _sql.connect("listings.db") as _conn:
-        df_bf_ret = pd.read_sql_query("SELECT * FROM bf_returns ORDER BY bf_date", _conn)
+        df_bf_ret = pd.read_sql_query("SELECT * FROM bf_returns WHERE ticker != 'XAUT' ORDER BY bf_date", _conn)
 except Exception:
     pass
 
@@ -220,9 +231,9 @@ if not df_bf_ret.empty:
         f2.metric("Avg FDV — Not Converted", f"${fdv_only.mean() / 1e6:,.0f}M")
 
     # Price performance chart: Converted vs Not Converted, 1d/7d/14d
-    st.markdown("**Post-Listing Mean Return** (Futures K-line)")
+    st.markdown("**Post-Listing Mean Return** (Perps K-line)")
     chart_data = []
-    for label, sub in [("→ Spot", df_bf_conv), ("BF Only", df_bf_only)]:
+    for label, sub in [("Perp to Spot", df_bf_conv), ("Perp Only", df_bf_only)]:
         for period, col in [("1d", "r1d"), ("7d", "r7d"), ("14d", "r14d")]:
             vals = sub[col].dropna()
             if not vals.empty:
@@ -243,12 +254,98 @@ if not df_bf_ret.empty:
         conv_df["FDV ($M)"] = conv_df["Ticker"].map(
             df_bf_conv.set_index("ticker")["fdv_at_listing"].dropna().to_dict()
         ).apply(lambda x: round(x / 1e6) if pd.notna(x) else None)
-        spot_exchanges = df[df["exchange"] != "Binance Futures"]
+        spot_exchanges = df[df["exchange"] != "Binance Perps"]
         conv_df["Spot Exchanges"] = conv_df["Ticker"].apply(
             lambda t: spot_exchanges[spot_exchanges["ticker"] == t]["exchange"].nunique()
         )
         conv_df = conv_df.sort_values("Days to Spot")
         st.dataframe(conv_df, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# ── 6b. Pathway to Binance Perps ─────────────────────────────────────────────
+st.subheader("Pathway to Binance Perps — Spot-First Tokens")
+
+spot_all = df_all[df_all["exchange"] != "Binance Perps"]
+bf_all = df_all[(df_all["exchange"] == "Binance Perps") & (df_all["ticker"] != "XAUT")]
+
+pathway_rows = []
+for _, row in bf_all.iterrows():
+    t, bd = row["ticker"], row["listing_date"]
+    before = spot_all[(spot_all["ticker"] == t) & (spot_all["listing_date"] <= bd)]
+    if before.empty:
+        continue
+    days = (bd - before["listing_date"].min()).days
+    exs = sorted(before["exchange"].unique())
+    bn_after = spot_all[(spot_all["ticker"] == t) & (spot_all["exchange"] == "Binance") & (spot_all["listing_date"] >= bd)]
+    fdv_row = df_bf_ret[df_bf_ret["ticker"] == t] if not df_bf_ret.empty else pd.DataFrame()
+    fdv = fdv_row.iloc[0]["fdv_at_listing"] if not fdv_row.empty and pd.notna(fdv_row.iloc[0]["fdv_at_listing"]) else None
+    pathway_rows.append({
+        "Ticker": t, "First Spot": before["listing_date"].min().strftime("%Y-%m-%d"),
+        "Perps Date": bd.strftime("%Y-%m-%d"), "Days to Perps": days,
+        "Exchanges Before": ", ".join(exs), "N Before": len(exs),
+        "FDV ($M)": round(fdv / 1e6) if fdv else None,
+        "→ Binance Spot": bn_after.iloc[0]["listing_date"].strftime("%Y-%m-%d") if not bn_after.empty else "–",
+    })
+
+if pathway_rows:
+    pw = pd.DataFrame(pathway_rows).sort_values("Days to Perps")
+    n_pw = len(pw)
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Spot-First Tokens", n_pw)
+    col_b.metric("Mean Days to Perps", f'{pw["Days to Perps"].mean():.0f}')
+    fdv_vals = pw["FDV ($M)"].dropna()
+    col_c.metric("Mean FDV", f"${fdv_vals.mean():.0f}M" if not fdv_vals.empty else "N/A")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**Exchanges Listed Before Perps**")
+        ex_count = {}
+        for exs in pw["Exchanges Before"]:
+            for e in exs.split(", "):
+                ex_count[e] = ex_count.get(e, 0) + 1
+        ex_df = pd.DataFrame([{"Exchange": k, "Count": v, "Pct": f"{v}/{n_pw}"} for k, v in ex_count.items()])
+        ex_df = ex_df.sort_values("Count", ascending=True)
+        fig_ex = px.bar(
+            ex_df, x="Count", y="Exchange", orientation="h", text="Pct",
+            color="Exchange", color_discrete_map=EXCHANGE_COLORS,
+        )
+        fig_ex.update_layout(showlegend=False, height=280, xaxis_title="# Tokens")
+        fig_ex.update_traces(textposition="outside")
+        st.plotly_chart(fig_ex, use_container_width=True)
+
+    with c2:
+        st.markdown("**Days from First Spot to Perps**")
+        bins = pd.cut(pw["Days to Perps"], bins=[-1, 2, 7, 30], labels=["0–2 days", "3–7 days", "8+ days"])
+        bin_df = bins.value_counts().reset_index()
+        bin_df.columns = ["Range", "Count"]
+        bin_df = bin_df.sort_values("Range")
+        fig_days = px.bar(
+            bin_df, x="Range", y="Count", text="Count",
+            color_discrete_sequence=["#F58518"],
+        )
+        fig_days.update_layout(height=280, xaxis_title="", yaxis_title="# Tokens")
+        fig_days.update_traces(textposition="outside")
+        st.plotly_chart(fig_days, use_container_width=True)
+
+    # FDV scatter
+    if not fdv_vals.empty:
+        st.markdown("**FDV at Listing vs Days to Perps**")
+        fig_fdv = px.scatter(
+            pw.dropna(subset=["FDV ($M)"]), x="Days to Perps", y="FDV ($M)",
+            text="Ticker", size_max=12,
+            color_discrete_sequence=["#8B6914"],
+        )
+        fig_fdv.update_traces(textposition="top center", marker=dict(size=10))
+        fig_fdv.update_layout(height=350, xaxis_title="Days from First Spot to Perps", yaxis_title="FDV ($M)")
+        st.plotly_chart(fig_fdv, use_container_width=True)
+
+    with st.expander("View all Spot-First → Perps tokens"):
+        st.dataframe(pw, use_container_width=True, hide_index=True)
+else:
+    st.info("No spot-first tokens found for Binance Perps.")
 
 st.divider()
 
