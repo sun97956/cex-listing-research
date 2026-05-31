@@ -19,17 +19,27 @@ if df_all.empty:
 
 df_all["listing_date"] = pd.to_datetime(df_all["listing_date"])
 df_all = df_all.drop_duplicates(subset=["ticker", "exchange", "listing_date"])
+# Exclude XAUT (commodity token) from Binance Perps analysis
+df_all = df_all[~((df_all["exchange"] == "Binance Perps") & (df_all["ticker"] == "XAUT"))]
 df_all["month"] = df_all["listing_date"].dt.to_period("M").astype(str)
 
 EXCHANGE_COLORS = {
     "Binance": "#F0B90B",
-    "Binance Perps": "#8B6914",
+    "Binance Perps": "#F7D36B",
     "OKX": "#000000",
     "ByBit": "#FF6600",
-    "Coinbase Exchange": "#0052FF",
-    "Upbit": "#7B2D8E",
+    "Coinbase Exchange": "#5B9BD5",
+    "Upbit": "#1A3A6B",
     "Bithumb": "#E74C3C",
 }
+
+CHART_LAYOUT = dict(
+    font=dict(size=15, color="black"),
+    xaxis=dict(tickfont=dict(size=14, color="black"), title_font=dict(size=15, color="black")),
+    yaxis=dict(tickfont=dict(size=14, color="black"), title_font=dict(size=15, color="black")),
+    legend=dict(font=dict(size=13, color="black")),
+    width=900,
+)
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
@@ -67,37 +77,36 @@ col4.metric("Binance Perps", perps_count)
 
 st.divider()
 
-# ── 2. Monthly trend ──────────────────────────────────────────────────────────
-st.subheader("Monthly Listings by Exchange")
+# ── 2 & 3. Monthly trend + Exchange comparison ───────────────────────────────
+trend_c1, trend_c2 = st.columns(2)
 
-monthly = (
-    df.groupby(["month", "exchange"]).size()
-    .reset_index(name="count").sort_values("month")
-)
-fig_trend = px.line(
-    monthly, x="month", y="count", color="exchange", markers=True,
-    labels={"month": "Month", "count": "New Listings", "exchange": "Exchange"},
-    color_discrete_map=EXCHANGE_COLORS,
-)
-fig_trend.update_layout(xaxis_tickangle=-30, legend_title_text="Exchange", height=400)
-st.plotly_chart(fig_trend, use_container_width=True)
+with trend_c1:
+    st.markdown("**Monthly Listings by Exchange**")
+    monthly = (
+        df.groupby(["month", "exchange"]).size()
+        .reset_index(name="count").sort_values("month")
+    )
+    fig_trend = px.bar(
+        monthly, x="month", y="count", color="exchange",
+        labels={"month": "Month", "count": "New Listings", "exchange": "Exchange"},
+        color_discrete_map=EXCHANGE_COLORS,
+    )
+    fig_trend.update_layout(**CHART_LAYOUT, barmode="stack", xaxis_tickangle=-30, legend_title_text="Exchange", height=450)
+    st.plotly_chart(fig_trend, use_container_width=True)
 
-st.divider()
-
-# ── 3. Exchange comparison ────────────────────────────────────────────────────
-st.subheader("Total Listings by Exchange")
-
-by_exchange = (
-    df.groupby("exchange").size()
-    .reset_index(name="count").sort_values("count", ascending=True)
-)
-fig_bar = px.bar(
-    by_exchange, x="count", y="exchange", orientation="h",
-    labels={"count": "Total Listings", "exchange": "Exchange"},
-    color="exchange", color_discrete_map=EXCHANGE_COLORS,
-)
-fig_bar.update_layout(showlegend=False, height=350)
-st.plotly_chart(fig_bar, use_container_width=True)
+with trend_c2:
+    st.markdown("**Total Listings by Exchange**")
+    by_exchange = (
+        df.groupby("exchange").size()
+        .reset_index(name="count").sort_values("count", ascending=True)
+    )
+    fig_bar = px.bar(
+        by_exchange, x="count", y="exchange", orientation="h",
+        labels={"count": "Total Listings", "exchange": "Exchange"},
+        color="exchange", color_discrete_map=EXCHANGE_COLORS,
+    )
+    fig_bar.update_layout(**CHART_LAYOUT, showlegend=False, height=450)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
 st.divider()
 
@@ -107,48 +116,92 @@ st.subheader("Price Performance After Listing")
 df_k = df_kline[df_kline["exchange"].isin(selected_exchanges)].copy() if not df_kline.empty else pd.DataFrame()
 
 if not df_k.empty:
-    st.markdown("**Mean Return by Exchange (7d / 14d / 30d)**")
     perf = df_k.groupby("exchange").agg(
         n=("return_7d_pct", "count"),
         mean_7d=("return_7d_pct", "mean"),
         mean_14d=("return_14d_pct", "mean"),
         mean_30d=("return_30d_pct", "mean"),
     ).round(1).reset_index().sort_values("mean_30d", ascending=True)
-    fig_perf = go.Figure()
-    period_colors = {"7d": "#F58518", "14d": "#E45756", "30d": "#72B7B2"}
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_7d"],  name="7d",  orientation="h", marker_color=period_colors["7d"]))
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_14d"], name="14d", orientation="h", marker_color=period_colors["14d"]))
-    fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_30d"], name="30d", orientation="h", marker_color=period_colors["30d"]))
-    fig_perf.update_layout(
-        barmode="group", height=400,
-        xaxis_title="Mean Return (%)", yaxis_title="",
-        legend_title_text="", xaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"),
-    )
-    st.plotly_chart(fig_perf, use_container_width=True)
 
-    # Price Position at Listing (followers only) — table format
-    df_followers = df_k[df_k["is_first"] == 0]
-    if not df_followers.empty:
-        st.markdown("**Price Position at Listing** — price change from first listing to this exchange's listing date")
-        pos = df_followers.groupby("exchange").agg(
-            n=("days_later", "count"),
-            mean_position=("price_position_pct", "mean"),
-            price_n=("price_position_pct", "count"),
-            avg_days_later=("days_later", "mean"),
-        ).round(1).reset_index().sort_values("mean_position", ascending=True)
-        pos.columns = ["Exchange", "Sample", "Mean Position %", "Price N", "Avg Days Later"]
-        st.dataframe(pos, use_container_width=True, hide_index=True)
+    perf_c1, perf_c2 = st.columns(2)
+
+    with perf_c1:
+        st.markdown("**Mean Return by Exchange (7d / 14d / 30d)**")
+        fig_perf = go.Figure()
+        period_colors = {"7d": "#F58518", "14d": "#E45756", "30d": "#72B7B2"}
+        fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_7d"],  name="7d",  orientation="h", marker_color=period_colors["7d"]))
+        fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_14d"], name="14d", orientation="h", marker_color=period_colors["14d"]))
+        fig_perf.add_trace(go.Bar(y=perf["exchange"], x=perf["mean_30d"], name="30d", orientation="h", marker_color=period_colors["30d"]))
+        fig_perf.update_layout(
+            **CHART_LAYOUT, barmode="group", height=450,
+            xaxis_title="Mean Return (%)", yaxis_title="",
+            legend_title_text="",
+        )
+        fig_perf.update_xaxes(zeroline=True, zerolinewidth=1, zerolinecolor="gray")
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+    with perf_c2:
+        # Price Position at Listing (followers only) — table format
+        df_followers = df_k[df_k["is_first"] == 0]
+        if not df_followers.empty:
+            st.markdown("**Price Position at Listing** — price change from first listing to this exchange's listing date")
+            pos = df_followers.groupby("exchange").agg(
+                n=("days_later", "count"),
+                mean_position=("price_position_pct", "mean"),
+                price_n=("price_position_pct", "count"),
+                avg_days_later=("days_later", "mean"),
+            ).round(1).reset_index().sort_values("mean_position", ascending=True)
+            pos.columns = ["Exchange", "Sample", "Mean Position %", "Price N", "Avg Days Later"]
+            st.dataframe(pos, use_container_width=True, hide_index=True)
+
+    # Peak Return by Exchange
+    if "peak_14d_pct" in df_k.columns and df_k["peak_14d_pct"].notna().any():
+        peak_agg = df_k.groupby("exchange").agg(
+            n=("peak_14d_pct", "count"),
+            mean_peak=("peak_14d_pct", "mean"),
+            median_peak=("peak_14d_pct", "median"),
+        ).round(1).reset_index().sort_values("mean_peak", ascending=True)
+
+        peak_c1, peak_c2 = st.columns(2)
+
+        with peak_c1:
+            st.markdown("**Peak Return by Exchange (14d High)**")
+            fig_peak = go.Figure()
+            fig_peak.add_trace(go.Bar(
+                y=peak_agg["exchange"], x=peak_agg["mean_peak"],
+                name="Mean", orientation="h", marker_color="#E45756",
+            ))
+            fig_peak.add_trace(go.Bar(
+                y=peak_agg["exchange"], x=peak_agg["median_peak"],
+                name="Median", orientation="h", marker_color="#72B7B2",
+            ))
+            fig_peak.update_layout(
+                **CHART_LAYOUT, barmode="group", height=450,
+                xaxis_title="Peak Return (%)", yaxis_title="",
+                legend_title_text="",
+            )
+            fig_peak.update_xaxes(zeroline=True, zerolinewidth=1, zerolinecolor="gray")
+            st.plotly_chart(fig_peak, use_container_width=True)
+
+        with peak_c2:
+            st.markdown("**Peak Return Data (14d High)**")
+            peak_agg.columns = ["Exchange", "N", "Mean Peak %", "Median Peak %"]
+            peak_agg = peak_agg.sort_values("Mean Peak %", ascending=False)
+            st.dataframe(peak_agg, use_container_width=True, hide_index=True)
 
     # Token-level table
     with st.expander("View all token price performance"):
         show_cols = ["ticker", "exchange", "listing_date", "source_exchange", "p0",
                      "is_first", "days_later", "price_position_pct",
-                     "return_1d_pct", "return_7d_pct", "return_14d_pct", "return_30d_pct"]
+                     "return_1d_pct", "return_7d_pct", "return_14d_pct", "return_30d_pct",
+                     "peak_14d_pct"]
         col_names = ["Ticker", "Exchange", "Listing Date", "Price Source", "Price (USD)",
                      "First?", "Days Later", "Price Position %",
-                     "1d %", "7d %", "14d %", "30d %"]
-        show = df_k[show_cols].copy()
-        show.columns = col_names
+                     "1d %", "7d %", "14d %", "30d %", "Peak 14d %"]
+        avail_cols = [c for c in show_cols if c in df_k.columns]
+        avail_names = [col_names[show_cols.index(c)] for c in avail_cols]
+        show = df_k[avail_cols].copy()
+        show.columns = avail_names
         show["First?"] = show["First?"].map({1: "Yes", 0: "No"})
         st.dataframe(show.sort_values("30d %", ascending=True), use_container_width=True, hide_index=True)
 else:
@@ -174,7 +227,7 @@ if not df_p.empty and "category" in df_p.columns:
         labels={"count": "# Listings", "exchange": "Exchange", "cat_group": "Category"},
         color_discrete_sequence=px.colors.qualitative.Set2,
     )
-    fig_cat.update_layout(height=380, legend_title_text="Category", xaxis_title="")
+    fig_cat.update_layout(**CHART_LAYOUT, height=420, legend_title_text="Category", xaxis_title="")
     st.plotly_chart(fig_cat, use_container_width=True)
 
 st.divider()
@@ -230,36 +283,40 @@ if not df_bf_ret.empty:
         f1.metric("Avg FDV — Converted", f"${fdv_conv.mean() / 1e6:,.0f}M")
         f2.metric("Avg FDV — Not Converted", f"${fdv_only.mean() / 1e6:,.0f}M")
 
-    # Price performance chart: Converted vs Not Converted, 1d/7d/14d
-    st.markdown("**Post-Listing Mean Return** (Perps K-line)")
-    chart_data = []
-    for label, sub in [("Perp to Spot", df_bf_conv), ("Perp Only", df_bf_only)]:
-        for period, col in [("1d", "r1d"), ("7d", "r7d"), ("14d", "r14d")]:
-            vals = sub[col].dropna()
-            if not vals.empty:
-                chart_data.append({"Group": label, "Period": period, "Mean Return %": round(vals.mean(), 1)})
-    if chart_data:
-        fig_bf = px.bar(
-            pd.DataFrame(chart_data), x="Period", y="Mean Return %", color="Group",
-            barmode="group", color_discrete_sequence=["#F58518", "#72B7B2"],
-        )
-        fig_bf.update_layout(height=350, xaxis_title="", legend_title_text="",
-                             yaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="gray"))
-        st.plotly_chart(fig_bf, use_container_width=True)
+    # Price performance chart + Conversion detail side by side
+    bf_c1, bf_c2 = st.columns(2)
 
-    # Conversion detail table with FDV and exchange coverage
-    if converted:
-        st.markdown("**Conversion Details**")
-        conv_df = pd.DataFrame(converted)
-        conv_df["FDV ($M)"] = conv_df["Ticker"].map(
-            df_bf_conv.set_index("ticker")["fdv_at_listing"].dropna().to_dict()
-        ).apply(lambda x: round(x / 1e6) if pd.notna(x) else None)
-        spot_exchanges = df[df["exchange"] != "Binance Perps"]
-        conv_df["Spot Exchanges"] = conv_df["Ticker"].apply(
-            lambda t: spot_exchanges[spot_exchanges["ticker"] == t]["exchange"].nunique()
-        )
-        conv_df = conv_df.sort_values("Days to Spot")
-        st.dataframe(conv_df, use_container_width=True, hide_index=True)
+    with bf_c1:
+        st.markdown("**Post-Listing Mean Return** (Perps K-line)")
+        chart_data = []
+        for label, sub in [("Perp to Spot", df_bf_conv), ("Perp Only", df_bf_only)]:
+            for period, col in [("1d", "r1d"), ("7d", "r7d"), ("14d", "r14d")]:
+                vals = sub[col].dropna()
+                if not vals.empty:
+                    chart_data.append({"Group": label, "Period": period, "Mean Return %": round(vals.mean(), 1)})
+        if chart_data:
+            fig_bf = px.bar(
+                pd.DataFrame(chart_data), x="Period", y="Mean Return %", color="Group",
+                barmode="group", color_discrete_sequence=["#F58518", "#72B7B2"],
+            )
+            fig_bf.update_layout(**CHART_LAYOUT, height=400, xaxis_title="", legend_title_text="")
+            fig_bf.update_yaxes(zeroline=True, zerolinewidth=1, zerolinecolor="gray")
+            st.plotly_chart(fig_bf, use_container_width=True)
+
+    with bf_c2:
+        # Conversion detail table with FDV and exchange coverage
+        if converted:
+            st.markdown("**Conversion Details**")
+            conv_df = pd.DataFrame(converted)
+            conv_df["FDV ($M)"] = conv_df["Ticker"].map(
+                df_bf_conv.set_index("ticker")["fdv_at_listing"].dropna().to_dict()
+            ).apply(lambda x: round(x / 1e6) if pd.notna(x) else None)
+            spot_exchanges = df[df["exchange"] != "Binance Perps"]
+            conv_df["Spot Exchanges"] = conv_df["Ticker"].apply(
+                lambda t: spot_exchanges[spot_exchanges["ticker"] == t]["exchange"].nunique()
+            )
+            conv_df = conv_df.sort_values("Days to Spot")
+            st.dataframe(conv_df, use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -312,7 +369,7 @@ if pathway_rows:
             ex_df, x="Count", y="Exchange", orientation="h", text="Pct",
             color="Exchange", color_discrete_map=EXCHANGE_COLORS,
         )
-        fig_ex.update_layout(showlegend=False, height=280, xaxis_title="# Tokens")
+        fig_ex.update_layout(**CHART_LAYOUT, showlegend=False, height=320, xaxis_title="# Tokens")
         fig_ex.update_traces(textposition="outside")
         st.plotly_chart(fig_ex, use_container_width=True)
 
@@ -326,7 +383,7 @@ if pathway_rows:
             bin_df, x="Range", y="Count", text="Count",
             color_discrete_sequence=["#F58518"],
         )
-        fig_days.update_layout(height=280, xaxis_title="", yaxis_title="# Tokens")
+        fig_days.update_layout(**CHART_LAYOUT, height=320, xaxis_title="", yaxis_title="# Tokens")
         fig_days.update_traces(textposition="outside")
         st.plotly_chart(fig_days, use_container_width=True)
 
@@ -339,7 +396,7 @@ if pathway_rows:
             color_discrete_sequence=["#8B6914"],
         )
         fig_fdv.update_traces(textposition="top center", marker=dict(size=10))
-        fig_fdv.update_layout(height=350, xaxis_title="Days from First Spot to Perps", yaxis_title="FDV ($M)")
+        fig_fdv.update_layout(**CHART_LAYOUT, height=400, xaxis_title="Days from First Spot to Perps", yaxis_title="FDV ($M)")
         st.plotly_chart(fig_fdv, use_container_width=True)
 
     with st.expander("View all Spot-First → Perps tokens"):

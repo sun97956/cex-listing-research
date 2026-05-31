@@ -223,18 +223,20 @@ def build_tasks():
 
 
 def fetch_kline(ticker, exchange, start_date):
-    """Fetch daily kline for a token from the given exchange."""
+    """Fetch daily kline for a token from the given exchange.
+    Returns (price_map, high_map): date_str -> close, date_str -> high."""
     end_date = datetime.now()
     fetcher = FETCHERS.get(exchange)
     if not fetcher:
-        return {}
+        return {}, {}
 
     candles = fetcher(ticker, start_date, end_date)
-    # Build dict: date_str -> close price
     price_map = {}
+    high_map = {}
     for dt, o, h, l, c in candles:
         price_map[dt] = c
-    return price_map
+        high_map[dt] = h
+    return price_map, high_map
 
 
 def find_closest_price(price_map, target_date, max_days=3):
@@ -273,6 +275,7 @@ def init_kline_table():
             return_7d_pct        REAL,
             return_14d_pct       REAL,
             return_30d_pct       REAL,
+            peak_14d_pct         REAL,
             PRIMARY KEY (ticker, exchange)
         )
     """)
@@ -302,23 +305,23 @@ def run():
         first_exchange = first_row["first_exchange"]
         first_date = first_row["first_date"]
 
-        # Prefer non-Korean exchange for K-line source
-        source_exchange = first_exchange
-        if first_exchange in ("Upbit", "Bithumb"):
-            # Check if a non-Korean exchange listed later
-            non_kr = group[~group["exchange"].isin(["Upbit", "Bithumb"])]
-            if not non_kr.empty:
-                # Use the earliest non-Korean exchange
-                alt = non_kr.iloc[0]
-                source_exchange = alt["exchange"]
-                # But we still need Korean data for the gap period
-                # For simplicity, use the non-Korean exchange and accept missing early data
+        # Pick best K-line source: prefer non-Perps, non-Korean spot exchange
+        exclude = ["Binance Perps", "Upbit", "Bithumb"]
+        preferred = group[~group["exchange"].isin(exclude)]
+        if not preferred.empty:
+            source_exchange = preferred.iloc[0]["exchange"]
+        else:
+            korean = group[group["exchange"].isin(["Upbit", "Bithumb"])]
+            if not korean.empty:
+                source_exchange = korean.iloc[0]["exchange"]
+            else:
+                source_exchange = first_exchange
 
         start = first_date.to_pydatetime().replace(tzinfo=None)
         print(f"[{idx+1:>2}/{total_tokens}] {ticker:12} src={source_exchange:20}", end="", flush=True)
 
         try:
-            price_map = fetch_kline(ticker, source_exchange, start)
+            price_map, high_map = fetch_kline(ticker, source_exchange, start)
         except Exception as e:
             print(f"  FETCH ERROR: {e}")
             errors += 1
@@ -360,13 +363,25 @@ def run():
             r14 = pct(p0, p14) if (l_date + timedelta(days=14)).strftime("%Y-%m-%d") <= today else None
             r30 = pct(p0, p30) if (l_date + timedelta(days=30)).strftime("%Y-%m-%d") <= today else None
 
+            # Peak: highest high in 14 days after listing
+            peak_14d = None
+            if (l_date + timedelta(days=1)).strftime("%Y-%m-%d") <= today:
+                highs = []
+                for d in range(0, 15):
+                    dt_key = (l_date + timedelta(days=d)).strftime("%Y-%m-%d")
+                    if dt_key in high_map:
+                        highs.append(high_map[dt_key])
+                if highs and p0 and p0 > 0:
+                    peak_14d = round((max(highs) - p0) / p0 * 100, 2)
+
             conn.execute("""
                 INSERT OR REPLACE INTO kline_returns
                 (ticker, exchange, listing_date, is_first, days_later, source_exchange,
-                 p0, price_position_pct, return_1d_pct, return_7d_pct, return_14d_pct, return_30d_pct)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 p0, price_position_pct, return_1d_pct, return_7d_pct, return_14d_pct, return_30d_pct,
+                 peak_14d_pct)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (ticker, ex, l_date.strftime("%Y-%m-%d"), is_first, days_later,
-                  source_exchange, p0, price_position, r1, r7, r14, r30))
+                  source_exchange, p0, price_position, r1, r7, r14, r30, peak_14d))
             event_count += 1
 
         conn.commit()
