@@ -5,7 +5,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:
     try:
         import streamlit as st
-        DATABASE_URL = st.secrets.get("DATABASE_URL", "")
+        DATABASE_URL = st.secrets["DATABASE_URL"]
     except Exception:
         pass
 
