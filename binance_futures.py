@@ -4,7 +4,7 @@ from database import init_db, insert_listing
 
 API_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 START_2026 = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
-END_2026_NOW = int(datetime(2026, 5, 13, 23, 59, 59, tzinfo=timezone.utc).timestamp() * 1000)
+END_2026_NOW = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
 
 def fetch_futures():
