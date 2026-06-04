@@ -43,14 +43,28 @@ CHART_LAYOUT = dict(
 
 # ── Sidebar: Data Update ──────────────────────────────────────────────────────
 st.sidebar.header("Data Update")
-if st.sidebar.button("Refresh K-line Data"):
+if st.sidebar.button("Update All Data"):
     with st.sidebar:
-        with st.spinner("Fetching K-line data from exchanges..."):
-            from kline_fetcher import run as kline_run
-            kline_run()
-        st.success("K-line data updated!")
-        st.cache_data.clear()
-        st.rerun()
+        try:
+            with st.spinner("Step 1/3: Scraping new listings..."):
+                from scraper import scrape_all
+                scrape_all()
+            st.success("Listings updated!")
+
+            with st.spinner("Step 2/3: Fetching Binance Perps data..."):
+                from binance_futures import run as bf_run
+                bf_run()
+            st.success("Binance Perps updated!")
+
+            with st.spinner("Step 3/3: Fetching K-line price data..."):
+                from kline_fetcher import run as kline_run
+                kline_run()
+            st.success("K-line data updated!")
+
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
