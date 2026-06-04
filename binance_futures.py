@@ -36,7 +36,7 @@ def run():
 
         inserted = insert_listing(
             ticker=ticker,
-            exchange="Binance Futures",
+            exchange="Binance Perps",
             trading_pair=trading_pair,
             listing_type="Futures",
             listing_date=listing_date,

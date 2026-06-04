@@ -208,7 +208,7 @@ def build_tasks():
     listings = pd.read_sql_query("SELECT ticker, exchange, listing_date FROM listings", conn)
     conn.close()
 
-    df = listings[listings["exchange"] != "Binance Futures"].copy()
+    df = listings[listings["exchange"] != "Binance Perps"].copy()
     df["listing_date"] = pd.to_datetime(df["listing_date"])
     df = df.sort_values("listing_date").drop_duplicates(["ticker", "exchange"], keep="first")
 
