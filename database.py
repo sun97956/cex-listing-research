@@ -114,7 +114,7 @@ def get_all(exchanges=None, date_from=None, date_to=None, listing_type=None):
     query += " ORDER BY listing_date DESC"
 
     conn = get_conn()
-    df = pd.read_sql_query(query, conn, params=params)
+    df = pd.read_sql_query(query, conn, params=tuple(params) if params else None)
     conn.close()
     return df
 
