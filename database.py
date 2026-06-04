@@ -2,6 +2,12 @@ import os
 import pandas as pd
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    try:
+        import streamlit as st
+        DATABASE_URL = st.secrets.get("DATABASE_URL", "")
+    except Exception:
+        pass
 
 
 def _use_pg():
