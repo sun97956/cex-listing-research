@@ -41,6 +41,17 @@ CHART_LAYOUT = dict(
     width=900,
 )
 
+# ── Sidebar: Data Update ──────────────────────────────────────────────────────
+st.sidebar.header("Data Update")
+if st.sidebar.button("Refresh K-line Data"):
+    with st.sidebar:
+        with st.spinner("Fetching K-line data from exchanges..."):
+            from kline_fetcher import run as kline_run
+            kline_run()
+        st.success("K-line data updated!")
+        st.cache_data.clear()
+        st.rerun()
+
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
 
