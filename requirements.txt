@@ -3,3 +3,4 @@ plotly==6.7.0
 pandas==2.3.3
 requests==2.31.0
 beautifulsoup4
+psycopg2-binary

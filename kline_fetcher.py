@@ -4,12 +4,10 @@ Fetch daily K-line data from exchange APIs and calculate:
   - Post-Listing Return (1d, 7d, 14d, 30d)
 """
 import time
-import sqlite3
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-
-DB_PATH = "listings.db"
+from database import get_conn, _use_pg
 PROXIES = {"http": None, "https": None}
 KRW_USD = 1 / 1380  # approximate, will fetch real rate
 
@@ -206,7 +204,7 @@ def get_krw_usd_rate():
 
 def build_tasks():
     """Build list of tokens and their listing events."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     listings = pd.read_sql_query("SELECT ticker, exchange, listing_date FROM listings", conn)
     conn.close()
 
@@ -259,9 +257,10 @@ def pct(p0, p1):
 
 
 def init_kline_table():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DROP TABLE IF EXISTS kline_returns")
-    conn.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS kline_returns")
+    cur.execute("""
         CREATE TABLE kline_returns (
             ticker              TEXT NOT NULL,
             exchange             TEXT NOT NULL,
@@ -280,6 +279,7 @@ def init_kline_table():
         )
     """)
     conn.commit()
+    cur.close()
     conn.close()
 
 
@@ -295,7 +295,9 @@ def run():
     # Group by token
     tokens = df.groupby("ticker")
     total_tokens = len(tokens)
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
+    cur = conn.cursor()
+    ph = "%s" if _use_pg() else "?"
 
     ok, errors, skipped = 0, 0, 0
 
@@ -374,14 +376,31 @@ def run():
                 if highs and p0 and p0 > 0:
                     peak_14d = round((max(highs) - p0) / p0 * 100, 2)
 
-            conn.execute("""
-                INSERT OR REPLACE INTO kline_returns
-                (ticker, exchange, listing_date, is_first, days_later, source_exchange,
-                 p0, price_position_pct, return_1d_pct, return_7d_pct, return_14d_pct, return_30d_pct,
-                 peak_14d_pct)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (ticker, ex, l_date.strftime("%Y-%m-%d"), is_first, days_later,
-                  source_exchange, p0, price_position, r1, r7, r14, r30, peak_14d))
+            if _use_pg():
+                cur.execute(f"""
+                    INSERT INTO kline_returns
+                    (ticker, exchange, listing_date, is_first, days_later, source_exchange,
+                     p0, price_position_pct, return_1d_pct, return_7d_pct, return_14d_pct, return_30d_pct,
+                     peak_14d_pct)
+                    VALUES ({','.join(['%s']*13)})
+                    ON CONFLICT (ticker, exchange) DO UPDATE SET
+                     listing_date=EXCLUDED.listing_date, is_first=EXCLUDED.is_first,
+                     days_later=EXCLUDED.days_later, source_exchange=EXCLUDED.source_exchange,
+                     p0=EXCLUDED.p0, price_position_pct=EXCLUDED.price_position_pct,
+                     return_1d_pct=EXCLUDED.return_1d_pct, return_7d_pct=EXCLUDED.return_7d_pct,
+                     return_14d_pct=EXCLUDED.return_14d_pct, return_30d_pct=EXCLUDED.return_30d_pct,
+                     peak_14d_pct=EXCLUDED.peak_14d_pct
+                """, (ticker, ex, l_date.strftime("%Y-%m-%d"), is_first, days_later,
+                      source_exchange, p0, price_position, r1, r7, r14, r30, peak_14d))
+            else:
+                cur.execute("""
+                    INSERT OR REPLACE INTO kline_returns
+                    (ticker, exchange, listing_date, is_first, days_later, source_exchange,
+                     p0, price_position_pct, return_1d_pct, return_7d_pct, return_14d_pct, return_30d_pct,
+                     peak_14d_pct)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (ticker, ex, l_date.strftime("%Y-%m-%d"), is_first, days_later,
+                      source_exchange, p0, price_position, r1, r7, r14, r30, peak_14d))
             event_count += 1
 
         conn.commit()
@@ -389,6 +408,7 @@ def run():
         print(f"  -> {event_count} events saved")
         time.sleep(0.3)
 
+    cur.close()
     conn.close()
     print(f"\nDone. Tokens: {ok} ok, {skipped} skipped, {errors} errors")
     print(f"Total records in kline_returns: check DB")

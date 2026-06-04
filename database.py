@@ -1,16 +1,44 @@
-import sqlite3
+import os
 import pandas as pd
 
-DB_PATH = "listings.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+
+def _use_pg():
+    return DATABASE_URL.startswith("postgres")
 
 
 def get_conn():
-    return sqlite3.connect(DB_PATH)
+    if _use_pg():
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        import sqlite3
+        return sqlite3.connect("listings.db")
+
+
+def _ph(n=1):
+    """Return n placeholder(s): %s for PG, ? for SQLite."""
+    p = "%s" if _use_pg() else "?"
+    return ", ".join([p] * n)
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    if _use_pg():
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS listings (
+                ticker       TEXT NOT NULL,
+                exchange     TEXT NOT NULL,
+                trading_pair TEXT,
+                listing_type TEXT,
+                listing_date TEXT NOT NULL,
+                UNIQUE (ticker, exchange, trading_pair, listing_date)
+            )
+        """)
+    else:
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS listings (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker       TEXT NOT NULL,
@@ -20,133 +48,87 @@ def init_db():
                 listing_date TEXT NOT NULL
             )
         """)
-        conn.execute("""
+        cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_unique
             ON listings (ticker, exchange, trading_pair, listing_date)
         """)
-        conn.commit()
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def insert_listing(ticker, exchange, trading_pair, listing_type, listing_date):
     """Returns True if inserted, False if duplicate."""
+    conn = get_conn()
+    cur = conn.cursor()
     try:
-        with get_conn() as conn:
-            conn.execute(
-                """INSERT INTO listings (ticker, exchange, trading_pair, listing_type, listing_date)
-                   VALUES (?, ?, ?, ?, ?)""",
+        if _use_pg():
+            cur.execute(
+                f"INSERT INTO listings (ticker, exchange, trading_pair, listing_type, listing_date) "
+                f"VALUES ({_ph(5)}) ON CONFLICT DO NOTHING",
                 (ticker, exchange, trading_pair, listing_type, listing_date),
             )
-            conn.commit()
-            return True
-    except sqlite3.IntegrityError:
+            inserted = cur.rowcount > 0
+        else:
+            cur.execute(
+                f"INSERT INTO listings (ticker, exchange, trading_pair, listing_type, listing_date) "
+                f"VALUES ({_ph(5)})",
+                (ticker, exchange, trading_pair, listing_type, listing_date),
+            )
+            inserted = True
+        conn.commit()
+        return inserted
+    except Exception:
+        conn.rollback()
         return False
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_all(exchanges=None, date_from=None, date_to=None, listing_type=None):
-    """Query listings with optional filters, returns DataFrame."""
     query = "SELECT ticker, exchange, trading_pair, listing_type, listing_date FROM listings WHERE 1=1"
     params = []
+    ph = "%s" if _use_pg() else "?"
 
     if exchanges:
-        placeholders = ",".join("?" * len(exchanges))
+        placeholders = ",".join([ph] * len(exchanges))
         query += f" AND exchange IN ({placeholders})"
         params.extend(exchanges)
     if date_from:
-        query += " AND listing_date >= ?"
+        query += f" AND listing_date >= {ph}"
         params.append(date_from)
     if date_to:
-        query += " AND listing_date <= ?"
+        query += f" AND listing_date <= {ph}"
         params.append(date_to)
     if listing_type:
-        query += " AND listing_type = ?"
+        query += f" AND listing_type = {ph}"
         params.append(listing_type)
 
     query += " ORDER BY listing_date DESC"
 
-    with get_conn() as conn:
-        return pd.read_sql_query(query, conn, params=params)
+    conn = get_conn()
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
 
 
 def get_stats():
-    """Returns total count and per-exchange breakdown."""
-    with get_conn() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
-        by_exchange = conn.execute(
-            "SELECT exchange, COUNT(*) as count FROM listings GROUP BY exchange ORDER BY count DESC"
-        ).fetchall()
-    return {"total": total, "by_exchange": dict(by_exchange)}
-
-
-def init_prices_table():
-    with get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS prices (
-                ticker          TEXT NOT NULL,
-                exchange        TEXT NOT NULL,
-                listing_date    TEXT NOT NULL,
-                coingecko_id    TEXT,
-                category        TEXT,
-                price_listing   REAL,
-                price_7d        REAL,
-                price_14d       REAL,
-                price_30d       REAL,
-                fdv_listing     REAL,
-                change_7d_pct   REAL,
-                change_14d_pct  REAL,
-                change_30d_pct  REAL,
-                PRIMARY KEY (ticker, exchange)
-            )
-        """)
-        # Migrate existing tables that lack newer columns
-        for col, typedef in [
-            ("price_30d",         "REAL"),
-            ("change_30d_pct",    "REAL"),
-            ("price_1d",          "REAL"),
-            ("change_1d_pct",     "REAL"),
-            ("listing_day_open",  "REAL"),
-            ("listing_day_high",  "REAL"),
-            ("listing_day_pump",  "REAL"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE prices ADD COLUMN {col} {typedef}")
-            except Exception:
-                pass
-        conn.commit()
-
-
-def insert_price(ticker, exchange, listing_date, coingecko_id, category,
-                 price_listing, price_7d, price_14d, fdv_listing,
-                 change_7d_pct, change_14d_pct, price_30d=None, change_30d_pct=None):
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO prices
-            (ticker, exchange, listing_date, coingecko_id, category,
-             price_listing, price_7d, price_14d, price_30d, fdv_listing,
-             change_7d_pct, change_14d_pct, change_30d_pct)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ticker, exchange, listing_date, coingecko_id, category,
-              price_listing, price_7d, price_14d, price_30d, fdv_listing,
-              change_7d_pct, change_14d_pct, change_30d_pct))
-        conn.commit()
-
-
-def update_price_1d_ohlc(ticker, exchange, price_1d, change_1d_pct,
-                          listing_day_open, listing_day_high, listing_day_pump):
-    """Update only the 1d and OHLC fields for an existing price record."""
-    with get_conn() as conn:
-        conn.execute("""
-            UPDATE prices SET
-                price_1d = ?, change_1d_pct = ?,
-                listing_day_open = ?, listing_day_high = ?, listing_day_pump = ?
-            WHERE ticker = ? AND exchange = ?
-        """, (price_1d, change_1d_pct, listing_day_open, listing_day_high,
-              listing_day_pump, ticker, exchange))
-        conn.commit()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM listings")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT exchange, COUNT(*) as count FROM listings GROUP BY exchange ORDER BY count DESC")
+    by_exchange = dict(cur.fetchall())
+    cur.close()
+    conn.close()
+    return {"total": total, "by_exchange": by_exchange}
 
 
 def get_prices():
-    with get_conn() as conn:
-        return pd.read_sql_query(
+    conn = get_conn()
+    try:
+        df = pd.read_sql_query(
             """SELECT p.*, l.listing_type
                FROM prices p
                JOIN (
@@ -157,11 +139,17 @@ def get_prices():
                ORDER BY p.listing_date DESC""",
             conn
         )
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
 
 
 def get_kline_returns():
-    with get_conn() as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM kline_returns ORDER BY listing_date DESC",
-            conn
-        )
+    conn = get_conn()
+    try:
+        df = pd.read_sql_query("SELECT * FROM kline_returns ORDER BY listing_date DESC", conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df

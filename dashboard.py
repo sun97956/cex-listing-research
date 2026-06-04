@@ -43,34 +43,9 @@ CHART_LAYOUT = dict(
 
 # ── Sidebar: Data Update ──────────────────────────────────────────────────────
 st.sidebar.header("Data Update")
-if st.sidebar.button("Update All Data"):
-    with st.sidebar:
-        with st.spinner("Step 1/3: Scraping new listings..."):
-            try:
-                from scraper import scrape_all
-                scrape_all()
-                st.success("Listings updated!")
-            except Exception as e:
-                st.warning(f"Scraper skipped: {e}")
-
-        with st.spinner("Step 2/3: Fetching Binance Perps data..."):
-            try:
-                from binance_futures import run as bf_run
-                bf_run()
-                st.success("Binance Perps updated!")
-            except Exception as e:
-                st.warning(f"Binance Perps skipped: {e}")
-
-        with st.spinner("Step 3/3: Fetching K-line price data..."):
-            try:
-                from kline_fetcher import run as kline_run
-                kline_run()
-                st.success("K-line data updated!")
-            except Exception as e:
-                st.warning(f"K-line skipped: {e}")
-
-        st.cache_data.clear()
-        st.rerun()
+if st.sidebar.button("Refresh Dashboard"):
+    st.cache_data.clear()
+    st.rerun()
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
@@ -280,9 +255,10 @@ st.header("3 · Binance Perps Analysis")
 # ── BF data ──────────────────────────────────────────────────────────────────
 df_bf_ret = pd.DataFrame()
 try:
-    import sqlite3 as _sql
-    with _sql.connect("listings.db") as _conn:
-        df_bf_ret = pd.read_sql_query("SELECT * FROM bf_returns WHERE ticker != 'XAUT' ORDER BY bf_date", _conn)
+    from database import get_conn as _get_conn
+    _conn = _get_conn()
+    df_bf_ret = pd.read_sql_query("SELECT * FROM bf_returns WHERE ticker != 'XAUT' ORDER BY bf_date", _conn)
+    _conn.close()
 except Exception:
     pass
 
